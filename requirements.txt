@@ -1,0 +1,10 @@
+# Notebook environment
+jupyterlab
+notebook
+ipykernel
+nbconvert
+
+# Data handling and performance analysis
+numpy
+pandas
+matplotlib
