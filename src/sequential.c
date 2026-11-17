@@ -23,7 +23,8 @@ int main(int argc, char **argv) {
     matmul_seq(d, A, B, C);
     double t1 = wall_time();
 
-    report("sequential", d, 1, t1 - t0, checksum(d, C));
+    int valid = verify_matrix(d, A, B, C);
+    if (valid) report("sequential", d, 1, t1 - t0, checksum(d, C));
     free(A); free(B); free(C);
-    return 0;
+    return valid ? EXIT_SUCCESS : EXIT_FAILURE;
 }
