@@ -1,15 +1,9 @@
 #include "common.h"
 
 /* C (n x p) = A (n x m) * B (m x p), c_ik = sum_j a_ij * b_jk.
- * Ordem i-j-k: o laço interno (k) percorre B e C com stride 1. */
+ * Todas as linhas de C são calculadas pelo núcleo i-j-k de common.h. */
 static void matmul_seq(dims_t d, const double *A, const double *B, double *C) {
-    const int n = d.n, m = d.m, p = d.p;
-    for (int i = 0; i < n; i++)
-        for (int j = 0; j < m; j++) {
-            const double a_ij = A[(size_t)i * m + j];
-            for (int k = 0; k < p; k++)
-                C[(size_t)i * p + k] += a_ij * B[(size_t)j * p + k];
-        }
+    matmul_rows(d, 0, d.n, A, B, C);
 }
 
 int main(int argc, char **argv) {
@@ -23,7 +17,8 @@ int main(int argc, char **argv) {
     matmul_seq(d, A, B, C);
     double t1 = wall_time();
 
-    report("sequential", d, 1, t1 - t0, checksum(d, C));
+    int valid = verify_matrix(d, A, B, C);
+    if (valid) report("sequential", d, 1, t1 - t0, checksum(d, C));
     free(A); free(B); free(C);
-    return 0;
+    return valid ? EXIT_SUCCESS : EXIT_FAILURE;
 }

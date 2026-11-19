@@ -1,6 +1,6 @@
 # Multiplicação de Matrizes Paralela
 
-Trabalho final de **Programação Paralela e Distribuída (2026/2) — UFSCar**. O problema vem da Maratona de Programação Paralela (SBAC-PAD) e será resolvido com OpenMP, MPI e GPU, comparando o desempenho de cada versão.
+Trabalho final de **Programação Paralela e Distribuída (2026/2) — UFSCar**. Comparamos a multiplicação de matrizes da Maratona de Programação Paralela (SBAC-PAD) em quatro versões: sequencial, OpenMP, MPI e CUDA.
 
 **Integrantes**
 - Enzo Dezem Alves — 801743
@@ -27,17 +27,27 @@ A versão sequencial é a referência de tempo e de correção para todas as out
 - **`i-k-j` (ingênua):** calcula cada $c_{ik}$ de uma vez, mas para isso desce pela coluna de $B$. Como as matrizes ficam guardadas linha por linha, cada acesso salta $p$ posições na memória e desperdiça o cache.
 - **`i-j-k` (usada):** fixa um valor $a_{ij}$ e o multiplica pela linha inteira $B[j]$, acumulando na linha $C[i]$. As duas linhas estão contíguas na memória, o que aproveita o cache e permite que o compilador vetorize o laço.
 
-As duas ordens fazem exatamente as mesmas contas. Usar a versão mais rápida como referência evita *speedups* inflados nas versões paralelas.
+As duas ordens fazem as mesmas contas. A versão `i-j-k` é a referência para as medições. O laço fica na função `matmul_rows` de [`src/common.h`](src/common.h), usada pelas versões sequencial, OpenMP e MPI, para que o compilador gere o mesmo código nas três e o *speedup* meça apenas o efeito da paralelização.
 
 ## Medição de tempo padronizada
 
-Todas as implementações usam a mesma infraestrutura, para que a comparação seja justa:
+Todas as implementações usam matrizes contíguas por linhas, com entradas determinísticas em precisão dupla.
 
-- [`src/common.h`](src/common.h) faz a leitura das dimensões, a alocação, a inicialização determinística das matrizes e o *checksum*. O relógio mede apenas o tempo da multiplicação.
-- Cada programa é executado como `./prog n m p` (ou `./prog n` para matrizes quadradas) e imprime uma linha no formato `RESULT,<impl>,<n>,<m>,<p>,<workers>,<tempo_s>,<checksum>`.
-- No notebook, a função `benchmark()` roda cada programa várias vezes e guarda os resultados em uma tabela única, usada na análise de desempenho.
+- [`src/common.h`](src/common.h) define a leitura das dimensões, a inicialização e o *checksum*. Com `MATMUL_VERIFY=1`, um produto escalar de referência também confere cada elemento de $C$.
+- Execute `./prog n m p` para $A_{n\times m}B_{m\times p}$ ou `./prog n` para matrizes quadradas. A linha `RESULT,<impl>,<n>,<m>,<p>,<workers>,<tempo_s>,<checksum>` é a saída comum.
+- O tempo principal inclui o custo da região paralela do OpenMP, as coletivas do MPI e as cópias host ↔ GPU em CUDA. A alocação, a preparação das entradas, a inicialização da plataforma e a validação ficam fora da janela cronometrada.
+- `DETAIL,mpi,<nós>,<scatter_s>,<bcast_s>,<compute_max_s>,<gather_s>` registra o tempo do rank 0 nas coletivas e o maior tempo de cálculo entre ranks. `DETAIL,cuda,<h2d_s>,<kernel_s>,<d2h_s>` registra as cópias e o tempo do kernel.
 
-## Como executar
+## Notebook
+
+Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Colab. O notebook inclui os fontes e compila em um diretório temporário. Para CUDA, selecione uma GPU em **Ambiente de execução → Alterar tipo de ambiente de execução**. Execute as células em ordem. As medições locais são exportadas em `matmul-local.csv`.
+
+Resultados guardados em [`results/`](results/):
+
+- [`local-i5-13450HX-rtx4050.csv`](results/local-i5-13450HX-rtx4050.csv): execução que aparece no notebook entregue, com Intel Core i5-13450HX (16 threads), GPU RTX 4050 Laptop, GCC 13, Open MPI 4.1.6 e CUDA 12.0, para as ordens 256 a 4096;
+- [`local-wsl.csv`](results/local-wsl.csv): execução anterior em WSL2 (Intel Core i5-14600K, GCC 15.2, Open MPI 5.0.10), sem GPU e com o laço OpenMP antigo, mantida apenas como registro.
+
+Em Linux ou WSL2, instale GCC com OpenMP, Open MPI (`mpicc` e `mpirun`) e, para CUDA, o CUDA Toolkit com `nvcc`. Use Jupyter para executar o mesmo notebook.
 
 ```bash
 python3 -m venv venv
@@ -46,4 +56,58 @@ pip install -r requirements.txt
 jupyter lab matrix_multiplication.ipynb
 ```
 
-Requisitos de sistema: `gcc` com OpenMP, uma implementação MPI (`mpicc`/`mpirun`) e o CUDA Toolkit (`nvcc`) para a versão em GPU. O notebook também pode ser executado no Google Colab.
+## Resultados
+
+Melhor tempo médio de cada implementação com $n = m = p = 4096$ (5 repetições, i5-13450HX + RTX 4050 Laptop, precisão dupla):
+
+| Implementação | Melhor configuração | Tempo | *Speedup* |
+|---|---|---:|---:|
+| Sequencial | 1 thread | 24,14 s | 1,0× |
+| OpenMP | `dynamic,8`, 16 threads | 3,40 s | 7,1× |
+| MPI | 16 ranks, 1 nó | 8,56 s | 2,8× |
+| CUDA | *tiles* 16×16, com cópias | 0,73 s | 33,0× |
+
+- **OpenMP:** com 16 threads, `dynamic,8` é 17% mais rápido que `static`, porque os P-cores e E-cores terminam suas linhas em tempos diferentes. O ganho se estabiliza quando $B$ deixa de caber no L3.
+- **MPI:** as coletivas custam menos de 8% do tempo. O limite é o cálculo: cada rank tem sua própria cópia de $B$, e 16 cópias disputam a banda da memória, enquanto as threads OpenMP compartilham uma única cópia no cache.
+- **CUDA:** o kernel atinge 210 GFLOP/s, perto do pico de precisão dupla da RTX 4050 Laptop. As cópias ocupam 67% do tempo com $n = 256$ e 10% com $n = 4096$.
+
+A análise completa, com gráficos de tempo, *speedup*, eficiência e fases do MPI, está na seção **Análise de desempenho** do notebook.
+
+## Compilar e executar no terminal
+
+```bash
+mkdir -p src/bin
+gcc -O3 src/sequential.c -o src/bin/sequential
+gcc -O3 -fopenmp src/openmp.c -o src/bin/openmp
+mpicc -O3 src/mpi.c -o src/bin/mpi
+
+MATMUL_VERIFY=1 ./src/bin/sequential 17 23 31
+MATMUL_VERIFY=1 OMP_NUM_THREADS=4 OMP_SCHEDULE=static ./src/bin/openmp 17 23 31
+MATMUL_VERIFY=1 mpirun -np 4 ./src/bin/mpi 17 23 31
+```
+
+Em Linux ou WSL2 com GPU NVIDIA e Toolkit CUDA 11.8 ou posterior, use `-arch=native` para a GPU disponível. A RTX 4050 Laptop e a RTX 4060 usam arquitetura Ada (`sm_89`). Para WSL2, instale o driver NVIDIA no Windows e siga a [configuração do CUDA no WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
+
+```bash
+nvidia-smi
+nvcc -O3 -arch=native src/cuda.cu -o src/bin/cuda
+MATMUL_VERIFY=1 ./src/bin/cuda 17 23 31
+```
+
+## Executar MPI no OpenHPC da UFSCar (opcional)
+
+Este experimento complementa as medições locais e ainda não foi executado; a análise do notebook funciona sem ele. O notebook também grava o script em `scripts/openhpc.sbatch` ao ser executado.
+
+No nó de acesso do cluster, entre na raiz da cópia atualizada do repositório. Carregue os módulos indicados pela disciplina para GCC e MPI e confirme `mpicc -show`. O script usa Slurm. Consulte `srun --mpi=list` e selecione o tipo de integração disponível no cluster, por exemplo `MPI_TYPE=pmix` para um Open MPI com PMIx. Use as opções de conta e partição da disciplina em `sbatch`, quando exigidas.
+
+```bash
+# 8 ranks em 1 nó, com uma varredura adicional em 1, 2 e 4 ranks
+MPI_TYPE=pmix sbatch --nodes=1 --ntasks=8 --ntasks-per-node=8 scripts/openhpc.sbatch
+
+# Os mesmos 8 ranks, agora distribuídos em 2 nós
+MPI_TYPE=pmix sbatch --nodes=2 --ntasks=8 --ntasks-per-node=4 scripts/openhpc.sbatch
+```
+
+Cada job valida um caso retangular e mede cinco repetições por combinação para as ordens 256, 512, 1024 e 2048. Passe outras ordens após o nome do script ou exporte `REPS` para mudar o número de repetições. A referência sequencial roda dentro da mesma alocação. O MPI informa quantos nós usou, e o script encerra com erro se a colocação divergir da alocação solicitada.
+
+Após a conclusão, transfira os logs `matmul-openhpc-<job>.log` para o diretório do notebook ou envie pela aba **Arquivos** do Colab. Execute as células da seção de análise para ver tempo, desvio padrão, *speedup*, eficiência e o peso das coletivas. A comparação de um e dois nós mantém o total de ranks e o tamanho das matrizes. Entregue os logs com o notebook para comprovar os jobs do cluster.
