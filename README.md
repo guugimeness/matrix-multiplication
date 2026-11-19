@@ -27,7 +27,7 @@ A versão sequencial é a referência de tempo e de correção para todas as out
 - **`i-k-j` (ingênua):** calcula cada $c_{ik}$ de uma vez, mas para isso desce pela coluna de $B$. Como as matrizes ficam guardadas linha por linha, cada acesso salta $p$ posições na memória e desperdiça o cache.
 - **`i-j-k` (usada):** fixa um valor $a_{ij}$ e o multiplica pela linha inteira $B[j]$, acumulando na linha $C[i]$. As duas linhas estão contíguas na memória, o que aproveita o cache e permite que o compilador vetorize o laço.
 
-As duas ordens fazem as mesmas contas. A versão `i-j-k` é a referência para as medições.
+As duas ordens fazem as mesmas contas. A versão `i-j-k` é a referência para as medições. O laço fica na função `matmul_rows` de [`src/common.h`](src/common.h), usada pelas versões sequencial, OpenMP e MPI, para que o compilador gere o mesmo código nas três e o *speedup* meça apenas o efeito da paralelização.
 
 ## Medição de tempo padronizada
 
@@ -40,7 +40,12 @@ Todas as implementações usam matrizes contíguas por linhas, com entradas dete
 
 ## Notebook
 
-Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Colab. O notebook inclui os fontes e compila em um diretório temporário. Para CUDA, selecione uma GPU em **Ambiente de execução → Alterar tipo de ambiente de execução**. Execute as células em ordem. As medições locais são exportadas em `matmul-local.csv`. O arquivo [`results/local-wsl.csv`](results/local-wsl.csv) registra as medições em WSL2 com GCC 15.2, Open MPI 5.0.10 e um nó.
+Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Colab. O notebook inclui os fontes e compila em um diretório temporário. Para CUDA, selecione uma GPU em **Ambiente de execução → Alterar tipo de ambiente de execução**. Execute as células em ordem. As medições locais são exportadas em `matmul-local.csv`.
+
+Resultados guardados em [`results/`](results/):
+
+- [`local-i5-13450HX-rtx4050.csv`](results/local-i5-13450HX-rtx4050.csv): execução que aparece no notebook entregue, com Intel Core i5-13450HX (16 threads), GPU RTX 4050 Laptop, GCC 13, Open MPI 4.1.6 e CUDA 12.0, para as ordens 256 a 4096;
+- [`local-wsl.csv`](results/local-wsl.csv): execução anterior em WSL2 (Intel Core i5-14600K, GCC 15.2, Open MPI 5.0.10), sem GPU e com o laço OpenMP antigo, mantida apenas como registro.
 
 Em Linux ou WSL2, instale GCC com OpenMP, Open MPI (`mpicc` e `mpirun`) e, para CUDA, o CUDA Toolkit com `nvcc`. Use Jupyter para executar o mesmo notebook.
 
@@ -50,6 +55,23 @@ source venv/bin/activate
 pip install -r requirements.txt
 jupyter lab matrix_multiplication.ipynb
 ```
+
+## Resultados
+
+Melhor tempo médio de cada implementação com $n = m = p = 4096$ (5 repetições, i5-13450HX + RTX 4050 Laptop, precisão dupla):
+
+| Implementação | Melhor configuração | Tempo | *Speedup* |
+|---|---|---:|---:|
+| Sequencial | 1 thread | 24,14 s | 1,0× |
+| OpenMP | `dynamic,8`, 16 threads | 3,40 s | 7,1× |
+| MPI | 16 ranks, 1 nó | 8,56 s | 2,8× |
+| CUDA | *tiles* 16×16, com cópias | 0,73 s | 33,0× |
+
+- **OpenMP:** com 16 threads, `dynamic,8` é 17% mais rápido que `static`, porque os P-cores e E-cores terminam suas linhas em tempos diferentes. O ganho se estabiliza quando $B$ deixa de caber no L3.
+- **MPI:** as coletivas custam menos de 8% do tempo. O limite é o cálculo: cada rank tem sua própria cópia de $B$, e 16 cópias disputam a banda da memória, enquanto as threads OpenMP compartilham uma única cópia no cache.
+- **CUDA:** o kernel atinge 210 GFLOP/s, perto do pico de precisão dupla da RTX 4050 Laptop. As cópias ocupam 67% do tempo com $n = 256$ e 10% com $n = 4096$.
+
+A análise completa, com gráficos de tempo, *speedup*, eficiência e fases do MPI, está na seção **Análise de desempenho** do notebook.
 
 ## Compilar e executar no terminal
 
@@ -72,7 +94,9 @@ nvcc -O3 -arch=native src/cuda.cu -o src/bin/cuda
 MATMUL_VERIFY=1 ./src/bin/cuda 17 23 31
 ```
 
-## Executar MPI no OpenHPC da UFSCar
+## Executar MPI no OpenHPC da UFSCar (opcional)
+
+Este experimento complementa as medições locais e ainda não foi executado; a análise do notebook funciona sem ele. O notebook também grava o script em `scripts/openhpc.sbatch` ao ser executado.
 
 No nó de acesso do cluster, entre na raiz da cópia atualizada do repositório. Carregue os módulos indicados pela disciplina para GCC e MPI e confirme `mpicc -show`. O script usa Slurm. Consulte `srun --mpi=list` e selecione o tipo de integração disponível no cluster, por exemplo `MPI_TYPE=pmix` para um Open MPI com PMIx. Use as opções de conta e partição da disciplina em `sbatch`, quando exigidas.
 

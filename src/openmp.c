@@ -7,12 +7,12 @@
 
 /* Multiplica A por B em paralelo e devolve quantas threads participaram. */
 static int matmul_omp(dims_t d, const double *A, const double *B, double *C) {
-    int n = d.n, m = d.m, p = d.p;
+    const int n = d.n;
     int nthreads = 1;
 
     // Região paralela: cria o time de threads.
     // As matrizes e as dimensões são compartilhadas por todas as threads.
-    #pragma omp parallel shared(A, B, C, n, m, p, nthreads)
+    #pragma omp parallel shared(A, B, C, d, nthreads)
     {
         // Só UMA thread do time registra o tamanho
         #pragma omp single nowait
@@ -20,17 +20,12 @@ static int matmul_omp(dims_t d, const double *A, const double *B, double *C) {
 
         // Worksharing: as iterações de i (linhas de C) são divididas entre as threads.
         // schedule(runtime): a política (static, dynamic...) é lida de OMP_SCHEDULE.
-        // Variáveis declaradas dentro do laço (i, j, k, a_ij) são privadas de cada thread.
+        // A variável i, declarada no laço, é privada de cada thread.
+        // Cada iteração calcula a linha i de C com o mesmo núcleo da versão sequencial
+        // (matmul_rows, em common.h), percorrendo B[j][.] e C[i][.] com stride 1.
         #pragma omp for schedule(runtime)
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < m; j++) {
-                const double a_ij = A[(size_t)i * m + j];
-
-                // Laço interno idêntico ao da versão sequencial: B[j][.] e C[i][.]
-                for (int k = 0; k < p; k++)
-                    C[(size_t)i * p + k] += a_ij * B[(size_t)j * p + k];
-            }
-        }
+        for (int i = 0; i < n; i++)
+            matmul_rows(d, i, i + 1, A, B, C);
         // Ao sair da região paralela, C está completa.
     }
 

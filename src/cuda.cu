@@ -61,6 +61,8 @@ int main(int argc, char **argv) {
     cudaEvent_t start, stop;
     CUDA(cudaEventCreate(&start));
     CUDA(cudaEventCreate(&stop));
+    /* Força o carregamento do kernel antes da medição: no CUDA 12 os módulos são
+     * carregados sob demanda, e esse custo cairia dentro do tempo do kernel. */
     cudaFuncAttributes attributes;
     CUDA(cudaFuncGetAttributes(&attributes, matmul_cuda));
 

@@ -2,16 +2,26 @@
 #include <mpi.h>
 
 int main(int argc, char **argv) {
-    dims_t d = parse_dims(argc, argv);
-    if (d.n > INT_MAX / d.m || d.m > INT_MAX / d.p || d.n > INT_MAX / d.p) {
-        fprintf(stderr, "Matrizes excedem o limite de contagens int das coletivas MPI\n");
-        return EXIT_FAILURE;
-    }
-
     MPI_Init(&argc, &argv);
     int rank, ranks;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &ranks);
+
+    /* Todos os ranks validam os argumentos, mas só o rank 0 imprime a mensagem de erro. */
+    dims_t d;
+    const char *error = NULL;
+    if (!try_parse_dims(argc, argv, &d))
+        error = "uso";
+    else if (d.n > INT_MAX / d.m || d.m > INT_MAX / d.p || d.n > INT_MAX / d.p)
+        error = "Matrizes excedem o limite de contagens int das coletivas MPI";
+    if (error) {
+        if (rank == 0) {
+            if (strcmp(error, "uso") == 0) print_usage(argv[0]);
+            else fprintf(stderr, "%s\n", error);
+        }
+        MPI_Finalize();
+        return EXIT_FAILURE;
+    }
 
     int base = d.n / ranks, rest = d.n % ranks;
     int rows = base + (rank < rest);
@@ -61,12 +71,8 @@ int main(int argc, char **argv) {
     MPI_Bcast(B, d.m * d.p, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     double t2 = MPI_Wtime();
 
-    for (int i = 0; i < rows; i++)
-        for (int j = 0; j < d.m; j++) {
-            double a_ij = local_A[(size_t)i * d.m + j];
-            for (int k = 0; k < d.p; k++)
-                local_C[(size_t)i * d.p + k] += a_ij * B[(size_t)j * d.p + k];
-        }
+    /* Cada rank calcula suas linhas com o mesmo núcleo i-j-k da versão sequencial. */
+    matmul_rows(d, 0, rows, local_A, B, local_C);
 
     double t3 = MPI_Wtime();
     MPI_Gatherv(local_C, rows * d.p, MPI_DOUBLE,

@@ -17,6 +17,13 @@
 
 typedef struct { int n, m, p; } dims_t;
 
+/* restrict é palavra-chave de C; em C++ (CUDA) o equivalente é __restrict__. */
+#ifdef __cplusplus
+#define MATMUL_RESTRICT __restrict__
+#else
+#define MATMUL_RESTRICT restrict
+#endif
+
 /* Tempo de parede em segundos (relógio monotônico, imune a ajustes do relógio do sistema). */
 static inline double wall_time(void) {
     struct timespec ts;
@@ -32,17 +39,28 @@ static inline int positive_int(const char *text) {
         ? 0 : (int)value;
 }
 
-/* Lê as dimensões: "prog n m p", ou "prog n" para matrizes quadradas (padrão: 1024). */
-static inline dims_t parse_dims(int argc, char **argv) {
-    dims_t d = {1024, 1024, 1024};
+/* Lê as dimensões sem encerrar o programa: devolve 1 se forem válidas.
+ * "prog n m p", ou "prog n" para matrizes quadradas (padrão: 1024). */
+static inline int try_parse_dims(int argc, char **argv, dims_t *d) {
+    *d = (dims_t){1024, 1024, 1024};
     if (argc == 4) {
-        d.n = positive_int(argv[1]);
-        d.m = positive_int(argv[2]);
-        d.p = positive_int(argv[3]);
+        d->n = positive_int(argv[1]);
+        d->m = positive_int(argv[2]);
+        d->p = positive_int(argv[3]);
     } else if (argc != 1)
-        d.n = d.m = d.p = (argc == 2) ? positive_int(argv[1]) : 0;
-    if (d.n <= 0 || d.m <= 0 || d.p <= 0) {
-        fprintf(stderr, "Uso: %s n [m p]  (dimensões positivas)\n", argv[0]);
+        d->n = d->m = d->p = (argc == 2) ? positive_int(argv[1]) : 0;
+    return d->n > 0 && d->m > 0 && d->p > 0;
+}
+
+static inline void print_usage(const char *prog) {
+    fprintf(stderr, "Uso: %s n [m p]  (dimensões positivas)\n", prog);
+}
+
+/* Versão usada pelos programas sem MPI: encerra com a mensagem de uso se as dimensões forem inválidas. */
+static inline dims_t parse_dims(int argc, char **argv) {
+    dims_t d;
+    if (!try_parse_dims(argc, argv, &d)) {
+        print_usage(argv[0]);
         exit(EXIT_FAILURE);
     }
     return d;
@@ -70,6 +88,22 @@ static inline void init_matrices(dims_t d, double *A, double *B) {
     for (int j = 0; j < d.m; j++)
         for (int k = 0; k < d.p; k++)
             B[(size_t)j * d.p + k] = (((size_t)j * 5 + (size_t)k * 2) % 13) / 10.0;
+}
+
+/* Núcleo de cálculo comum às versões de CPU: acumula em C as linhas [row_begin, row_end).
+ * Ordem i-j-k: o laço interno (k) percorre B[j][.] e C[i][.] com stride 1.
+ * Usar a mesma função na versão sequencial, no OpenMP e no MPI garante que o compilador
+ * gere o mesmo código para o laço, e o speedup mede só o efeito da paralelização. */
+static inline void matmul_rows(dims_t d, int row_begin, int row_end,
+                               const double *MATMUL_RESTRICT A, const double *MATMUL_RESTRICT B,
+                               double *MATMUL_RESTRICT C) {
+    const int m = d.m, p = d.p;
+    for (int i = row_begin; i < row_end; i++)
+        for (int j = 0; j < m; j++) {
+            const double a_ij = A[(size_t)i * m + j];
+            for (int k = 0; k < p; k++)
+                C[(size_t)i * p + k] += a_ij * B[(size_t)j * p + k];
+        }
 }
 
 /* Ative em casos pequenos para conferir cada elemento por produto escalar. */
