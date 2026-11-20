@@ -40,7 +40,7 @@ Todas as implementações usam matrizes contíguas por linhas, com entradas dete
 
 ## Notebook
 
-Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Colab. O notebook inclui os fontes e compila em um diretório temporário. Para CUDA, selecione uma GPU em **Ambiente de execução → Alterar tipo de ambiente de execução**. Execute as células em ordem. As medições locais são exportadas em `matmul-local.csv`.
+Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Colab. O notebook inclui os fontes e compila em um diretório temporário. Para CUDA, selecione uma GPU em **Ambiente de execução → Alterar tipo de ambiente de execução**. Execute as células em ordem. As medições locais (sequencial, OpenMP e CUDA) são exportadas em `matmul-local.csv`. A versão MPI roda no cluster OpenHPC, e o notebook lê a saída do job em `results/openhpc/`; no Colab, envie esse arquivo para a sessão antes de executar a seção de MPI.
 
 Resultados guardados em [`results/`](results/):
 
@@ -48,7 +48,7 @@ Resultados guardados em [`results/`](results/):
 - [`openhpc/saida-1152732.out`](results/openhpc/saida-1152732.out): saída do job MPI no cluster OpenHPC (2 máquinas com Xeon E5-2650 v3, 8 processos em cada, ordens 512 a 4096, 3 repetições), lida pelo notebook;
 - [`local-wsl.csv`](results/local-wsl.csv): execução anterior em WSL2 (Intel Core i5-14600K, GCC 15.2, Open MPI 5.0.10), sem GPU e com o laço OpenMP antigo, mantida apenas como registro.
 
-Em Linux ou WSL2, instale GCC com OpenMP, Open MPI (`mpicc` e `mpirun`) e, para CUDA, o CUDA Toolkit com `nvcc`. Use Jupyter para executar o mesmo notebook.
+Em Linux ou WSL2, instale GCC com OpenMP e, para CUDA, o CUDA Toolkit com `nvcc`. Use Jupyter para executar o mesmo notebook.
 
 ```bash
 python3 -m venv venv
@@ -86,11 +86,9 @@ A análise completa, com gráficos de tempo, *speedup*, eficiência e fases do M
 mkdir -p src/bin
 gcc -O3 src/sequential.c -o src/bin/sequential
 gcc -O3 -fopenmp src/openmp.c -o src/bin/openmp
-mpicc -O3 src/mpi.c -o src/bin/mpi   # para testes; as medições do MPI são feitas no cluster
 
 MATMUL_VERIFY=1 ./src/bin/sequential 17 23 31
 MATMUL_VERIFY=1 OMP_NUM_THREADS=4 OMP_SCHEDULE=static ./src/bin/openmp 17 23 31
-MATMUL_VERIFY=1 mpirun -np 4 ./src/bin/mpi 17 23 31
 ```
 
 Em Linux ou WSL2 com GPU NVIDIA e Toolkit CUDA 11.8 ou posterior, use `-arch=native` para a GPU disponível. A RTX 4050 Laptop e a RTX 4060 usam arquitetura Ada (`sm_89`). Para WSL2, instale o driver NVIDIA no Windows e siga a [configuração do CUDA no WSL](https://docs.nvidia.com/cuda/wsl-user-guide/index.html).
