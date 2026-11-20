@@ -27,7 +27,7 @@ A versão sequencial é a referência de tempo e de correção para todas as out
 - **`i-k-j` (ingênua):** calcula cada $c_{ik}$ de uma vez, mas para isso desce pela coluna de $B$. Como as matrizes ficam guardadas linha por linha, cada acesso salta $p$ posições na memória e desperdiça o cache.
 - **`i-j-k` (usada):** fixa um valor $a_{ij}$ e o multiplica pela linha inteira $B[j]$, acumulando na linha $C[i]$. As duas linhas estão contíguas na memória, o que aproveita o cache e permite que o compilador vetorize o laço.
 
-As duas ordens fazem as mesmas contas. A versão `i-j-k` é a referência para as medições. O laço fica na função `matmul_rows` de [`src/common.h`](src/common.h), usada pelas versões sequencial, OpenMP e MPI, para que o compilador gere o mesmo código nas três e o *speedup* meça apenas o efeito da paralelização.
+As duas ordens fazem as mesmas contas. A versão `i-j-k` é a referência para as medições. O laço fica na função `matmul_rows` de [`src/common.h`](src/common.h), usada pelas versões sequencial, OpenMP e MPI, para que o compilador gere o mesmo código nas três e o *speedup* meça apenas o efeito da paralelização. A função é marcada com `__attribute__((noipa))`: sem isso, o GCC 9.4 do cluster a otimizava de um jeito diferente em cada programa, e o MPI com um rank ficava 33% mais lento que a versão sequencial.
 
 ## Medição de tempo padronizada
 
@@ -44,7 +44,8 @@ Abra [`matrix_multiplication.ipynb`](matrix_multiplication.ipynb) no Google Cola
 
 Resultados guardados em [`results/`](results/):
 
-- [`local-i5-13450HX-rtx4050.csv`](results/local-i5-13450HX-rtx4050.csv): execução que aparece no notebook entregue, com Intel Core i5-13450HX (16 threads), GPU RTX 4050 Laptop, GCC 13, Open MPI 4.1.6 e CUDA 12.0, para as ordens 256 a 4096;
+- [`local-i5-13450HX-rtx4050.csv`](results/local-i5-13450HX-rtx4050.csv): execução local que aparece no notebook entregue (sequencial, OpenMP e CUDA), com Intel Core i5-13450HX (16 threads), GPU RTX 4050 Laptop, GCC 13 e CUDA 12.0, para as ordens 256 a 4096;
+- [`openhpc/saida-1152732.out`](results/openhpc/saida-1152732.out): saída do job MPI no cluster OpenHPC (2 máquinas com Xeon E5-2650 v3, 8 processos em cada, ordens 512 a 4096, 3 repetições), lida pelo notebook;
 - [`local-wsl.csv`](results/local-wsl.csv): execução anterior em WSL2 (Intel Core i5-14600K, GCC 15.2, Open MPI 5.0.10), sem GPU e com o laço OpenMP antigo, mantida apenas como registro.
 
 Em Linux ou WSL2, instale GCC com OpenMP, Open MPI (`mpicc` e `mpirun`) e, para CUDA, o CUDA Toolkit com `nvcc`. Use Jupyter para executar o mesmo notebook.
@@ -58,18 +59,24 @@ jupyter lab matrix_multiplication.ipynb
 
 ## Resultados
 
-Melhor tempo médio de cada implementação com $n = m = p = 4096$ (5 repetições, i5-13450HX + RTX 4050 Laptop, precisão dupla):
+Melhor tempo médio de cada implementação com $n = m = p = 4096$, em precisão dupla. Sequencial, OpenMP e CUDA rodaram no notebook (i5-13450HX + RTX 4050 Laptop, 5 repetições); o MPI rodou no cluster OpenHPC (Xeon E5-2650 v3, 3 repetições). Cada *speedup* é calculado em relação à versão sequencial do mesmo ambiente.
 
-| Implementação | Melhor configuração | Tempo | *Speedup* |
-|---|---|---:|---:|
-| Sequencial | 1 thread | 24,14 s | 1,0× |
-| OpenMP | `dynamic,8`, 16 threads | 3,40 s | 7,1× |
-| MPI | 16 ranks, 1 nó | 8,56 s | 2,8× |
-| CUDA | *tiles* 16×16, com cópias | 0,73 s | 33,0× |
+| Ambiente | Implementação | Melhor configuração | Tempo | *Speedup* |
+|---|---|---|---:|---:|
+| Notebook | Sequencial | 1 thread | 23,69 s | 1,0× |
+| Notebook | OpenMP | `dynamic,8`, 16 threads | 3,43 s | 6,9× |
+| Notebook | CUDA | *tiles* 16×16, com cópias | 0,73 s | 32,4× |
+| Cluster | Sequencial | 1 processo | 45,10 s | 1,0× |
+| Cluster | MPI | 8 ranks, 1 máquina | 9,85 s | 4,6× |
+| Cluster | MPI | 16 ranks, 2 máquinas | 6,46 s | 7,0× |
+
+O gráfico mostra a melhor configuração de cada implementação em todos os tamanhos medidos. As linhas contínuas são do notebook e as tracejadas, do cluster.
+
+![Tempo e speedup da melhor configuração de cada implementação](assets/implementation_comparison.png)
 
 - **OpenMP:** com 16 threads, `dynamic,8` é 17% mais rápido que `static`, porque os P-cores e E-cores terminam suas linhas em tempos diferentes. O ganho se estabiliza quando $B$ deixa de caber no L3.
-- **MPI:** as coletivas custam menos de 8% do tempo. O limite é o cálculo: cada rank tem sua própria cópia de $B$, e 16 cópias disputam a banda da memória, enquanto as threads OpenMP compartilham uma única cópia no cache.
-- **CUDA:** o kernel atinge 210 GFLOP/s, perto do pico de precisão dupla da RTX 4050 Laptop. As cópias ocupam 67% do tempo com $n = 256$ e 10% com $n = 4096$.
+- **MPI:** com o mesmo número de ranks, duas máquinas são mais rápidas que uma (7,17 s contra 9,85 s com 8 ranks), porque cada máquina tem a sua própria banda de memória, que é o que limita o cálculo. A rede encarece o `Bcast` de $B$ (de 0,09 s para 0,45 s), mas as coletivas ficam em 10% do tempo com 8 ranks. Com 16 ranks, cada máquina volta a saturar a memória e as coletivas chegam a 26%.
+- **CUDA:** o kernel atinge 209 GFLOP/s, perto do pico de precisão dupla da RTX 4050 Laptop. As cópias ocupam 67% do tempo com $n = 256$ e 10% com $n = 4096$.
 
 A análise completa, com gráficos de tempo, *speedup*, eficiência e fases do MPI, está na seção **Análise de desempenho** do notebook.
 
@@ -79,7 +86,7 @@ A análise completa, com gráficos de tempo, *speedup*, eficiência e fases do M
 mkdir -p src/bin
 gcc -O3 src/sequential.c -o src/bin/sequential
 gcc -O3 -fopenmp src/openmp.c -o src/bin/openmp
-mpicc -O3 src/mpi.c -o src/bin/mpi
+mpicc -O3 src/mpi.c -o src/bin/mpi   # para testes; as medições do MPI são feitas no cluster
 
 MATMUL_VERIFY=1 ./src/bin/sequential 17 23 31
 MATMUL_VERIFY=1 OMP_NUM_THREADS=4 OMP_SCHEDULE=static ./src/bin/openmp 17 23 31
@@ -94,20 +101,20 @@ nvcc -O3 -arch=native src/cuda.cu -o src/bin/cuda
 MATMUL_VERIFY=1 ./src/bin/cuda 17 23 31
 ```
 
-## Executar MPI no OpenHPC da UFSCar (opcional)
+## Executar MPI no OpenHPC da UFSCar
 
-Este experimento complementa as medições locais e ainda não foi executado; a análise do notebook funciona sem ele. O notebook também grava o script em `scripts/openhpc.sbatch` ao ser executado.
+A versão MPI é medida no cluster OpenHPC da UFSCar, com processos em duas máquinas (nós de 20 núcleos físicos, GCC 9.4, Open MPI 4.1.1). O script [`scripts/job_matmul.sh`](scripts/job_matmul.sh) segue o modelo `job_mpi.sh` da disciplina: compila no nó de login, porque os nós de cálculo não têm os cabeçalhos do C, e depois se submete ao Slurm. Ele usa um núcleo físico por processo (`--cpus-per-task=2`) e força o MPI a usar a rede `200.18.104.0/24`, a única que permite conexões entre os nós.
 
-No nó de acesso do cluster, entre na raiz da cópia atualizada do repositório. Carregue os módulos indicados pela disciplina para GCC e MPI e confirme `mpicc -show`. O script usa Slurm. Consulte `srun --mpi=list` e selecione o tipo de integração disponível no cluster, por exemplo `MPI_TYPE=pmix` para um Open MPI com PMIx. Use as opções de conta e partição da disciplina em `sbatch`, quando exigidas.
+Dentro do job, o script valida o resultado elemento a elemento, mede a versão sequencial no próprio nó e mede o MPI de duas formas: com todos os ranks em **1 nó** (`--map-by slot`) e com os ranks alternados entre **2 nós** (`--map-by node`). Os tamanhos e o número de repetições ficam no bloco `CONFIGURE AQUI`; o número de máquinas e de processos por máquina, nas linhas `#SBATCH -N` e `--ntasks-per-node`.
+
+A partir da raiz do repositório (troque `uXXXXXX` pelo usuário do cluster):
 
 ```bash
-# 8 ranks em 1 nó, com uma varredura adicional em 1, 2 e 4 ranks
-MPI_TYPE=pmix sbatch --nodes=1 --ntasks=8 --ntasks-per-node=8 scripts/openhpc.sbatch
-
-# Os mesmos 8 ranks, agora distribuídos em 2 nós
-MPI_TYPE=pmix sbatch --nodes=2 --ntasks=8 --ntasks-per-node=4 scripts/openhpc.sbatch
+ssh uXXXXXX@openhpc.ufscar.br "mkdir -p matmul"
+scp scripts/job_matmul.sh src/common.h src/sequential.c src/mpi.c uXXXXXX@openhpc.ufscar.br:matmul/
+ssh uXXXXXX@openhpc.ufscar.br "cd matmul && sed -i 's/\r$//' job_matmul.sh && bash job_matmul.sh"
+ssh uXXXXXX@openhpc.ufscar.br "squeue -u uXXXXXX"
+scp "uXXXXXX@openhpc.ufscar.br:matmul/saida-*.out" results/openhpc/
 ```
 
-Cada job valida um caso retangular e mede cinco repetições por combinação para as ordens 256, 512, 1024 e 2048. Passe outras ordens após o nome do script ou exporte `REPS` para mudar o número de repetições. A referência sequencial roda dentro da mesma alocação. O MPI informa quantos nós usou, e o script encerra com erro se a colocação divergir da alocação solicitada.
-
-Após a conclusão, transfira os logs `matmul-openhpc-<job>.log` para o diretório do notebook ou envie pela aba **Arquivos** do Colab. Execute as células da seção de análise para ver tempo, desvio padrão, *speedup*, eficiência e o peso das coletivas. A comparação de um e dois nós mantém o total de ranks e o tamanho das matrizes. Entregue os logs com o notebook para comprovar os jobs do cluster.
+O notebook lê os arquivos `saida-<job>.out` em `results/openhpc/` (ou no diretório do notebook) e inclui as medições na análise. Ao ser executado, ele também grava o script e os fontes em `openhpc/`, prontos para enviar ao cluster.

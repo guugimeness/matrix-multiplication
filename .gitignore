@@ -66,7 +66,8 @@ __pycache__/
 # Build outputs from src/
 src/bin/
 
-# Resultados de novas execuções
+# Resultados de novas execuções e cópias geradas pelo notebook
 matmul-local.csv
-matmul-openhpc-*.log
-.matmul-*/
+/openhpc/
+/saida-*.out
+!results/openhpc/saida-*.out

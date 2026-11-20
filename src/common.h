@@ -90,11 +90,21 @@ static inline void init_matrices(dims_t d, double *A, double *B) {
             B[(size_t)j * d.p + k] = (((size_t)j * 5 + (size_t)k * 2) % 13) / 10.0;
 }
 
+/* noipa (GCC): a função é compilada sem olhar quem a chama, sem inlining nem clones
+ * especializados. Assim o laço sai igual, instrução por instrução, nos três programas. */
+#if defined(__GNUC__) && !defined(__clang__)
+#define MATMUL_KERNEL __attribute__((noipa, unused)) static
+#else
+#define MATMUL_KERNEL __attribute__((noinline, unused)) static
+#endif
+
 /* Núcleo de cálculo comum às versões de CPU: acumula em C as linhas [row_begin, row_end).
  * Ordem i-j-k: o laço interno (k) percorre B[j][.] e C[i][.] com stride 1.
  * Usar a mesma função na versão sequencial, no OpenMP e no MPI garante que o compilador
- * gere o mesmo código para o laço, e o speedup mede só o efeito da paralelização. */
-static inline void matmul_rows(dims_t d, int row_begin, int row_end,
+ * gere o mesmo código para o laço, e o speedup mede só o efeito da paralelização.
+ * Só a mesma função não basta: inlinada, o GCC 9 otimizava o laço de um jeito em cada
+ * programa (o sequencial ficava 33% mais rápido que o MPI com 1 processo). */
+MATMUL_KERNEL void matmul_rows(dims_t d, int row_begin, int row_end,
                                const double *MATMUL_RESTRICT A, const double *MATMUL_RESTRICT B,
                                double *MATMUL_RESTRICT C) {
     const int m = d.m, p = d.p;
